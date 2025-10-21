@@ -37,7 +37,8 @@ def recommend_books(metrics, target_book_idx, n_recommendations=5, weights=None)
 
 
 def recommend_based_on_multiple_likes(metrics, liked_book_indices, n_recommendations=10, weights=None, 
-                                     exclude_liked=True, strategy='combined'):
+                                     exclude_liked=True, strategy='combined', disliked_book_indices=None,
+                                     penalty_factor=0.7):
     """
     Рекомендация книг на основе нескольких понравившихся книг
     
@@ -47,28 +48,39 @@ def recommend_based_on_multiple_likes(metrics, liked_book_indices, n_recommendat
     - n_recommendations: количество рекомендаций
     - exclude_liked: исключать ли понравившиеся книги из результатов
     - strategy: стратегия объединения рекомендаций
-        'combined' - комбинированный подход (по умолчанию)
-        'average' - усреднение расстояний
-        'union' - объединение рекомендаций от каждой книги
-        'content_boost' - усиление рекомендаций на основе общего контента
+    - disliked_book_indices: список индексов непонравившихся книг
+    - penalty_factor: коэффициент штрафа за схожесть с дизлайками (0-1)
     """
     
     if not liked_book_indices:
         print("Ошибка: список понравившихся книг пуст")
         return []
     
-    # Получаем информацию о понравившихся книгах
+    # Инициализируем список дизлайков если None
+    if disliked_book_indices is None:
+        disliked_book_indices = []
+    
+    # Получаем информацию о понравившихся и непонравившихся книгах
     liked_books = [metrics.df.iloc[idx] for idx in liked_book_indices]
+    disliked_books = [metrics.df.iloc[idx] for idx in disliked_book_indices]
     
     print("=" * 70)
-    print("РЕКОМЕНДАЦИИ НА ОСНОВЕ ВАШИХ ПОНРАВИВШИХСЯ КНИГ:")
+    print("РЕКОМЕНДАЦИИ НА ОСНОВЕ ВАШИХ ПРЕДПОЧТЕНИЙ:")
     print("=" * 70)
     
+    print("👍 ПОНРАВИЛИСЬ:")
     for i, idx in enumerate(liked_book_indices):
         book = metrics.df.iloc[idx]
-        print(f"{i+1}. '{book['title']}' - {book['author']} ({book['genre']})")
+        print(f"  {i+1}. '{book['title']}' - {book['author']} ({book['genre']})")
+    
+    if disliked_book_indices:
+        print("\n👎 НЕ ПОНРАВИЛИСЬ:")
+        for i, idx in enumerate(disliked_book_indices):
+            book = metrics.df.iloc[idx]
+            print(f"  {i+1}. '{book['title']}' - {book['author']} ({book['genre']})")
     print()
     
+    # Получаем рекомендации с учетом стратегии
     if strategy == 'combined':
         recommendations = _combined_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
     elif strategy == 'average':
@@ -80,10 +92,39 @@ def recommend_based_on_multiple_likes(metrics, liked_book_indices, n_recommendat
     else:
         recommendations = _combined_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
     
+    # Применяем штраф за дизлайки
+    if disliked_book_indices:
+        recommendations = _apply_dislike_penalty(metrics, recommendations, disliked_book_indices, penalty_factor)
+    
     # Выводим рекомендации
-    _display_recommendations(metrics, recommendations, liked_books)
+    _display_recommendations(metrics, recommendations, liked_books, disliked_books)
     
     return recommendations
+
+
+def _apply_dislike_penalty(metrics, recommendations, disliked_indices, penalty_factor):
+    """Применяет штраф к рекомендациям на основе дизлайков"""
+    penalized_recommendations = []
+    
+    for book_idx, similarity in recommendations:
+        if book_idx in disliked_indices:
+            continue  # Полностью исключаем дизлайки
+            
+        # Вычисляем схожесть с дизлайками
+        max_dislike_similarity = 0
+        for dislike_idx in disliked_indices:
+            dislike_sim = metrics.similarity_score(book_idx, dislike_idx)
+            max_dislike_similarity = max(max_dislike_similarity, dislike_sim)
+        
+        # Применяем штраф
+        penalty = max_dislike_similarity * penalty_factor
+        penalized_similarity = similarity * (1 - penalty)
+        
+        penalized_recommendations.append((book_idx, max(penalized_similarity, 0)))
+    
+    # Сортируем по убыванию скорректированной схожести
+    penalized_recommendations.sort(key=lambda x: x[1], reverse=True)
+    return penalized_recommendations
 
 
 def _combined_strategy(metrics, liked_indices, n_recommendations, weights, exclude_liked):
@@ -207,17 +248,29 @@ def _boost_by_common_features(metrics, liked_indices, book_scores):
         # Усиление за множественные совпадения жанров
         matching_genres = sum(1 for liked_genre in genres if liked_genre == book['genre'])
         if matching_genres > 1:
-            boost *= (1 + 0.1 * matching_genres)
+            boost *= (1 + 0.15 * matching_genres)
+
+        # Усиление за множественные совпадения автора
+        matching_genres = sum(1 for liked_genre in genres if liked_genre == book['author'])
+        if matching_genres > 1:
+            boost *= (1 + 0.2 * matching_genres)
         
         boosted_scores[book_idx] *= boost
     
     return boosted_scores
 
 
-def _display_recommendations(metrics, recommendations, liked_books):
+def _display_recommendations(metrics, recommendations, liked_books, disliked_books=None):
     """Отображение рекомендаций с анализом"""
+    if disliked_books is None:
+        disliked_books = []
+        
     print("ТОП РЕКОМЕНДАЦИЙ:")
     print("-" * 70)
+    
+    if not recommendations:
+        print("Не найдено подходящих рекомендаций с учетом ваших предпочтений")
+        return
     
     for i, (book_idx, similarity) in enumerate(recommendations, 1):
         book = metrics.df.iloc[book_idx]
@@ -230,12 +283,25 @@ def _display_recommendations(metrics, recommendations, liked_books):
             best_matches.append((liked['title'], sim))
         
         best_matches.sort(key=lambda x: x[1], reverse=True)
-        top_match = best_matches[0]
+        top_match = best_matches[0] if best_matches else ("", 0)
+        
+        # Проверяем схожесть с дизлайками
+        max_dislike_similarity = 0
+        if disliked_books:
+            for disliked in disliked_books:
+                disliked_idx = metrics.df[metrics.df['title'] == disliked['title']].index[0]
+                dislike_sim = metrics.similarity_score(book_idx, disliked_idx)
+                max_dislike_similarity = max(max_dislike_similarity, dislike_sim)
         
         print(f"{i}. {book['title']} - {book['author']}")
         print(f"   Жанр: {book['genre']}, Год: {book['year']}, Страниц: {book['pages']}")
         print(f"   Общая схожесть: {similarity:.3f}")
-        print(f"   Наиболее похожа на: '{top_match[0]}' (схожесть: {top_match[1]:.3f})")
+        
+        if top_match[1] > 0:
+            print(f"   Наиболее похожа на: '{top_match[0]}' (схожесть: {top_match[1]:.3f})")
+        
+        if max_dislike_similarity > 0.6:
+            print(f"   ⚠️  Умеренно похожа на непонравившиеся книги (схожесть: {max_dislike_similarity:.3f})")
         
         # Показываем общие черты с понравившимися книгами
         common_features = []
@@ -246,7 +312,7 @@ def _display_recommendations(metrics, recommendations, liked_books):
                 common_features.append(f"автор {liked['author']}")
         
         if common_features:
-            print(f"   Общие черты: {', '.join(set(common_features))}")
+            print(f"   ✅ Общие черты: {', '.join(set(common_features))}")
         
         print()
 
@@ -261,32 +327,65 @@ def interactive_recommendations(metrics):
         book = metrics.df.iloc[i]
         print(f"{i:2d}. {book['title']} - {book['author']} ({book['genre']})")
     
-    print("\nВведите номера понравившихся книг через запятую (например: 1,3,5)")
-    print("Или 'q' для выхода")
-    
     while True:
-        user_input = input("\nВаш выбор: ").strip()
+        print("\n" + "="*50)
+        print("Введите номера понравившихся книг через запятую (например: 1,3,5)")
+        print("Или 'q' для выхода")
+        
+        user_input = input("\nВаш выбор (лайки): ").strip()
         
         if user_input.lower() == 'q':
             break
         
         try:
-            # Парсим ввод пользователя
+            # Парсим ввод пользователя для лайков
             liked_indices = [int(idx.strip()) for idx in user_input.split(',')]
             
-            # Проверяем валидность индексов
-            valid_indices = []
+            # Проверяем валидность индексов лайков
+            valid_liked_indices = []
             for idx in liked_indices:
-                if idx in valid_indices:
+                if idx in valid_liked_indices:
                     print(f"Предупреждение: индекс {idx} указан несколько раз")
                 elif 0 <= idx < len(metrics.df):
-                    valid_indices.append(idx)
+                    valid_liked_indices.append(idx)
                 else:
                     print(f"Предупреждение: индекс {idx} не существует")
             
-            if not valid_indices:
+            if not valid_liked_indices:
                 print("Ошибка: не указано ни одного валидного индекса книги")
                 continue
+            
+            # Запрашиваем дизлайки
+            print("\nВведите номера НЕпонравившихся книг через запятую (или Enter чтобы пропустить)")
+            dislike_input = input("Ваш выбор (дизлайки): ").strip()
+            
+            valid_disliked_indices = []
+            if dislike_input:
+                try:
+                    disliked_indices = [int(idx.strip()) for idx in dislike_input.split(',')]
+                    for idx in disliked_indices:
+                        if idx in valid_disliked_indices:
+                            print(f"Предупреждение: индекс {idx} указан несколько раз")
+                        elif idx in valid_liked_indices:
+                            print(f"Предупреждение: индекс {idx} есть в лайках, игнорируем")
+                        elif 0 <= idx < len(metrics.df):
+                            valid_disliked_indices.append(idx)
+                        else:
+                            print(f"Предупреждение: индекс {idx} не существует")
+                except ValueError:
+                    print("Ошибка ввода дизлайков, будет использован пустой список")
+            
+            # Запрашиваем коэффициент штрафа
+            print("\nВведите коэффициент штрафа за дизлайки (0.0-1.0, по умолчанию 0.7)")
+            penalty_input = input("Коэффициент: ").strip()
+            
+            penalty_factor = 0.7
+            if penalty_input:
+                try:
+                    penalty_factor = float(penalty_input)
+                    penalty_factor = max(0.0, min(1.0, penalty_factor))  # Ограничиваем диапазон
+                except ValueError:
+                    print("Ошибка ввода коэффициента, используется значение по умолчанию 0.7")
             
             print("\n" + "="*70)
             print("Выберите стратегию рекомендаций:")
@@ -309,9 +408,11 @@ def interactive_recommendations(metrics):
             # Получаем рекомендации
             recommend_based_on_multiple_likes(
                 metrics, 
-                valid_indices, 
-                n_recommendations=3,
-                strategy=strategy
+                valid_liked_indices, 
+                n_recommendations=5,
+                strategy=strategy,
+                disliked_book_indices=valid_disliked_indices,
+                penalty_factor=penalty_factor
             )
             
             print("Хотите попробовать другие книги? (y/n)")
@@ -341,18 +442,37 @@ metrics = BookDistanceMetrics(df)
 # liked_books = [0, 2, 5]  # Индексы понравившихся книг
 # recommend_based_on_multiple_likes(metrics, liked_books, n_recommendations=6)
 
-# # Пример 3: Сравнение разных стратегий
+# # Пример 3: Рекомендации с учетом дизлайков
+# print("\n" + "="*70)
+# print("=== РЕКОМЕНДАЦИИ С УЧЕТОМ ДИЗЛАЙКОВ ===")
+# liked_books = [0, 2, 5]
+# disliked_books = [1, 4]  # Индексы непонравившихся книг
+# recommend_based_on_multiple_likes(
+#     metrics, 
+#     liked_books, 
+#     n_recommendations=6,
+#     disliked_book_indices=disliked_books,
+#     penalty_factor=0.8
+# )
+
+# # Пример 4: Сравнение разных стратегий
 # print("\n" + "="*70)
 # print("=== СРАВНЕНИЕ СТРАТЕГИЙ ===")
 # test_likes = [1, 3, 7]
+# test_dislikes = [0, 8]
 
 # strategies = ['combined', 'average', 'union', 'content_boost']
 # for strategy in strategies:
 #     print(f"\n--- Стратегия: {strategy.upper()} ---")
-#     recommend_based_on_multiple_likes(metrics, test_likes, n_recommendations=3, strategy=strategy)
+#     recommend_based_on_multiple_likes(
+#         metrics, 
+#         test_likes, 
+#         n_recommendations=3, 
+#         strategy=strategy,
+#         disliked_book_indices=test_dislikes
+#     )
 
-# Пример 4: Запуск интерактивного режима
+# Пример 5: Запуск интерактивного режима
 print("\n" + "="*70)
 print("=== ИНТЕРАКТИВНЫЙ РЕЖИМ ===")
 interactive_recommendations(metrics)
-
