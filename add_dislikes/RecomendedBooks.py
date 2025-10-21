@@ -80,21 +80,25 @@ def recommend_based_on_multiple_likes(metrics, liked_book_indices, n_recommendat
             print(f"  {i+1}. '{book['title']}' - {book['author']} ({book['genre']})")
     print()
     
-    # Получаем рекомендации с учетом стратегии
+    # Получаем оценки для ВСЕХ книг с учетом стратегии
     if strategy == 'combined':
-        recommendations = _combined_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
+        all_scores = _combined_strategy_all_books(metrics, liked_book_indices, weights, exclude_liked)
     elif strategy == 'average':
-        recommendations = _average_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
+        all_scores = _average_strategy_all_books(metrics, liked_book_indices, weights, exclude_liked)
     elif strategy == 'union':
-        recommendations = _union_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
+        all_scores = _union_strategy_all_books(metrics, liked_book_indices, weights, exclude_liked)
     elif strategy == 'content_boost':
-        recommendations = _content_boost_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
+        all_scores = _content_boost_strategy_all_books(metrics, liked_book_indices, weights, exclude_liked)
     else:
-        recommendations = _combined_strategy(metrics, liked_book_indices, n_recommendations, weights, exclude_liked)
+        all_scores = _combined_strategy_all_books(metrics, liked_book_indices, weights, exclude_liked)
     
-    # Применяем штраф за дизлайки
+    # Применяем штраф за дизлайки ко ВСЕМ книгам
     if disliked_book_indices:
-        recommendations = _apply_dislike_penalty(metrics, recommendations, disliked_book_indices, penalty_factor)
+        all_scores = _apply_dislike_penalty_all_books(metrics, all_scores, disliked_book_indices, penalty_factor)
+    
+    # Теперь сортируем ВСЕ книги по скорректированной оценке и выбираем лучшие
+    all_recommendations = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)
+    recommendations = all_recommendations[:n_recommendations]
     
     # Выводим рекомендации
     _display_recommendations(metrics, recommendations, liked_books, disliked_books)
@@ -102,11 +106,11 @@ def recommend_based_on_multiple_likes(metrics, liked_book_indices, n_recommendat
     return recommendations
 
 
-def _apply_dislike_penalty(metrics, recommendations, disliked_indices, penalty_factor):
-    """Применяет штраф к рекомендациям на основе дизлайков"""
-    penalized_recommendations = []
+def _apply_dislike_penalty_all_books(metrics, all_scores, disliked_indices, penalty_factor):
+    """Применяет штраф ко ВСЕМ книгам на основе дизлайков"""
+    penalized_scores = {}
     
-    for book_idx, similarity in recommendations:
+    for book_idx, similarity in all_scores.items():
         if book_idx in disliked_indices:
             continue  # Полностью исключаем дизлайки
             
@@ -120,16 +124,14 @@ def _apply_dislike_penalty(metrics, recommendations, disliked_indices, penalty_f
         penalty = max_dislike_similarity * penalty_factor
         penalized_similarity = similarity * (1 - penalty)
         
-        penalized_recommendations.append((book_idx, max(penalized_similarity, 0)))
+        penalized_scores[book_idx] = max(penalized_similarity, 0)
     
-    # Сортируем по убыванию скорректированной схожести
-    penalized_recommendations.sort(key=lambda x: x[1], reverse=True)
-    return penalized_recommendations
+    return penalized_scores
 
 
-def _combined_strategy(metrics, liked_indices, n_recommendations, weights, exclude_liked):
-    """Комбинированная стратегия: усреднение + усиление по общим признакам"""
-    # Шаг 1: Вычисляем среднее расстояние до всех понравившихся книг
+def _combined_strategy_all_books(metrics, liked_indices, weights, exclude_liked):
+    """Комбинированная стратегия: усреднение + усиление по общим признакам для ВСЕХ книг"""
+    # Шаг 1: Вычисляем среднее расстояние до всех понравившихся книг для ВСЕХ книг
     book_scores = {}
     
     for book_idx in range(len(metrics.df)):
@@ -144,17 +146,14 @@ def _combined_strategy(metrics, liked_indices, n_recommendations, weights, exclu
         avg_similarity = total_similarity / len(liked_indices)
         book_scores[book_idx] = avg_similarity
     
-    # Шаг 2: Усиливаем рекомендации с общими признаками
+    # Шаг 2: Усиливаем рекомендации с общими признаками для ВСЕХ книг
     boosted_scores = _boost_by_common_features(metrics, liked_indices, book_scores)
     
-    # Сортируем по убыванию схожести
-    recommendations = sorted(boosted_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    return recommendations[:n_recommendations]
+    return boosted_scores
 
 
-def _average_strategy(metrics, liked_indices, n_recommendations, weights, exclude_liked):
-    """Стратегия усреднения: простая средняя схожесть"""
+def _average_strategy_all_books(metrics, liked_indices, weights, exclude_liked):
+    """Стратегия усреднения: простая средняя схожесть для ВСЕХ книг"""
     book_scores = {}
     
     for book_idx in range(len(metrics.df)):
@@ -169,49 +168,38 @@ def _average_strategy(metrics, liked_indices, n_recommendations, weights, exclud
         avg_similarity = total_similarity / len(liked_indices)
         book_scores[book_idx] = avg_similarity
     
-    # Сортируем по убыванию схожести
-    recommendations = sorted(book_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    return recommendations[:n_recommendations]
+    return book_scores
 
 
-def _union_strategy(metrics, liked_indices, n_recommendations, weights, exclude_liked):
-    """Стратегия объединения: берем лучшие рекомендации от каждой книги"""
-    all_recommendations = []
+def _union_strategy_all_books(metrics, liked_indices, weights, exclude_liked):
+    """Стратегия объединения: берем лучшие рекомендации от каждой книги для ВСЕХ книг"""
+    # Создаем временный словарь для хранения максимальной схожести
+    max_scores = {}
     
-    for liked_idx in liked_indices:
-        # Получаем рекомендации для каждой понравившейся книги
-        similar = metrics.get_similar_books(liked_idx, n_recommendations * 2, weights)
-        all_recommendations.extend(similar)
-    
-    # Объединяем и усредняем схожести для одинаковых книг
-    merged_scores = {}
-    for book_idx, similarity in all_recommendations:
+    for book_idx in range(len(metrics.df)):
         if exclude_liked and book_idx in liked_indices:
             continue
-        if book_idx in merged_scores:
-            merged_scores[book_idx] = max(merged_scores[book_idx], similarity)
-        else:
-            merged_scores[book_idx] = similarity
+            
+        # Для каждой книги находим максимальную схожесть с любой понравившейся книгой
+        max_similarity = 0
+        for liked_idx in liked_indices:
+            similarity = metrics.similarity_score(book_idx, liked_idx, weights)
+            max_similarity = max(max_similarity, similarity)
+        
+        max_scores[book_idx] = max_similarity
     
-    # Сортируем по убыванию схожести
-    recommendations = sorted(merged_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    return recommendations[:n_recommendations]
+    return max_scores
 
 
-def _content_boost_strategy(metrics, liked_indices, n_recommendations, weights, exclude_liked):
-    """Стратегия усиления контента: усиление рекомендаций с общими признаками"""
-    # Сначала получаем базовые рекомендации через усреднение
-    base_recommendations = _average_strategy(metrics, liked_indices, n_recommendations * 3, weights, exclude_liked)
+def _content_boost_strategy_all_books(metrics, liked_indices, weights, exclude_liked):
+    """Стратегия усиления контента: усиление рекомендаций с общими признаками для ВСЕХ книг"""
+    # Сначала получаем базовые оценки для ВСЕХ книг через усреднение
+    base_scores = _average_strategy_all_books(metrics, liked_indices, weights, exclude_liked)
     
-    # Усиливаем на основе общих признаков
-    boosted_scores = _boost_by_common_features(metrics, liked_indices, dict(base_recommendations))
+    # Усиливаем на основе общих признаков для ВСЕХ книг
+    boosted_scores = _boost_by_common_features(metrics, liked_indices, base_scores)
     
-    # Сортируем по убыванию схожести
-    recommendations = sorted(boosted_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    return recommendations[:n_recommendations]
+    return boosted_scores
 
 
 def _boost_by_common_features(metrics, liked_indices, book_scores):
@@ -251,9 +239,9 @@ def _boost_by_common_features(metrics, liked_indices, book_scores):
             boost *= (1 + 0.15 * matching_genres)
 
         # Усиление за множественные совпадения автора
-        matching_genres = sum(1 for liked_genre in genres if liked_genre == book['author'])
-        if matching_genres > 1:
-            boost *= (1 + 0.2 * matching_genres)
+        matching_authors = sum(1 for liked_author in authors if liked_author == book['author'])
+        if matching_authors > 1:
+            boost *= (1 + 0.2 * matching_authors)
         
         boosted_scores[book_idx] *= boost
     
@@ -476,3 +464,4 @@ metrics = BookDistanceMetrics(df)
 print("\n" + "="*70)
 print("=== ИНТЕРАКТИВНЫЙ РЕЖИМ ===")
 interactive_recommendations(metrics)
+
