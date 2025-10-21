@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Загрузка данных
-df = pd.read_csv('DataBooks.csv')
+df = pd.read_csv('../DataBooks.csv')
 
 class NumericalDistanceComparator:
     def __init__(self, df):

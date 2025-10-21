@@ -215,7 +215,7 @@ class BookDistanceMetrics:
         return similarities[:n]
 
 if __name__ == "__main__":
-    df = pd.read_csv('DataBooks.csv')
+    df = pd.read_csv('../DataBooks.csv')
     metrics = BookDistanceMetrics(df)
     
     # Пример вычисления расстояния между книгами

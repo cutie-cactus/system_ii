@@ -36,7 +36,7 @@ def recommend_books(metrics, target_book_idx, n_recommendations=5, weights=None)
 
 
 # Загрузка данных
-df = pd.read_csv('DataBooks.csv')
+df = pd.read_csv('../DataBooks.csv')
 
 # Пример использования рекомендаций
 metrics = BookDistanceMetrics(df)

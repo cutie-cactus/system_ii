@@ -116,21 +116,6 @@ class BookDistanceMetrics:
         distance = (depth1 + depth2 - 2 * common_level) / (2 * max_depth)
         return min(distance, 1.0)
     
-    def normalized_numerical_distance(self, feature, value1, value2):
-        """
-        Нормализованное расстояние для числовых признаков
-        Возвращает значение от 0 до 1
-        """
-        if feature not in self.scalers:
-            # Для бинарных признаков
-            return abs(value1 - value2)
-        
-        # Нормализуем значения
-        val1_norm = self.scalers[feature].transform([[value1]])[0][0]
-        val2_norm = self.scalers[feature].transform([[value2]])[0][0]
-        
-        return abs(val1_norm - val2_norm)
-    
     def get_numerical_vector(self, book_idx):
         """Получает вектор числовых признаков для книги"""
         book = self.df.iloc[book_idx]
@@ -177,7 +162,7 @@ class BookDistanceMetrics:
                 'language': 0.05,
                 'numerical': 0.35
             }
-        # тепловые карты для числовых сравнить разные расстояния  и выбор лучшей
+
         book1 = self.df.iloc[book1_idx]
         book2 = self.df.iloc[book2_idx]
         
@@ -229,26 +214,3 @@ class BookDistanceMetrics:
         similarities.sort(key=lambda x: x[1], reverse=True)
         return similarities[:n]
 
-if __name__ == "__main__":
-    df = pd.read_csv('DataBooks.csv')
-    metrics = BookDistanceMetrics(df)
-    
-    # Пример вычисления расстояния между книгами
-    print("Расстояние между книгой 1 и книгой 2:", 
-          metrics.composite_distance(0, 1))
-    
-    print("Схожесть между книгой 1 и книгой 2:", 
-          metrics.similarity_score(0, 1))
-    
-    # Поиск похожих книг
-    similar = metrics.get_similar_books(0, n=3)
-    print("\nПохожие на книгу 1:")
-    for idx, similarity in similar:
-        book = df.iloc[idx]
-        print(f"  {book['title']} - {similarity:.3f}")
-    
-    # Пример таксономического расстояния между жанрами
-    print(f"\nТаксономическое расстояние:")
-    print(f"классика - фэнтези: {metrics.taxonomic_distance('классика', 'фэнтези'):.3f}")
-    print(f"фэнтези - фантастика: {metrics.taxonomic_distance('фэнтези', 'фантастика'):.3f}")
-    print(f"классика - классика: {metrics.taxonomic_distance('классика', 'классика'):.3f}")
