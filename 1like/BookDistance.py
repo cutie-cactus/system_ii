@@ -7,6 +7,7 @@ class BookDistanceMetrics:
         self.df = df
         self._setup_taxonomy_tree()
         self._setup_scalers()
+        self.numerical_features = ['year', 'pages']
     
     def _setup_taxonomy_tree(self):
         """Иерархия жанров в виде дерева"""
@@ -130,6 +131,23 @@ class BookDistanceMetrics:
         
         return abs(val1_norm - val2_norm)
     
+    def get_numerical_vector(self, book_idx):
+        """Получает вектор числовых признаков для книги"""
+        book = self.df.iloc[book_idx]
+        vector = []
+
+        for feature in self.numerical_features:
+            value = self.scalers[feature].transform([[book[feature]]])[0][0]
+            vector.append(value)
+
+        return np.array(vector)
+    
+    # Метрика 2: Манхэттенское расстояние
+    def manhattan_distance(self, i, j):
+        vec1 = self.get_numerical_vector(i)
+        vec2 = self.get_numerical_vector(j)
+        return np.sum(np.abs(vec1 - vec2))
+    
     def categorical_distance(self, val1, val2):
         """
         Расстояние для категориальных признаков
@@ -156,7 +174,8 @@ class BookDistanceMetrics:
                 'pages': 0.15,
                 'author': 0.1,
                 'publisher': 0.05,
-                'language': 0.05
+                'language': 0.05,
+                'numerical': 0.35
             }
         # тепловые карты для числовых сравнить разные расстояния  и выбор лучшей
         book1 = self.df.iloc[book1_idx]
@@ -169,11 +188,8 @@ class BookDistanceMetrics:
         total_distance += weights['genre'] * genre_dist
         
         # Числовые признаки
-        year_dist = self.normalized_numerical_distance('year', book1['year'], book2['year'])
-        total_distance += weights['year'] * year_dist
-        
-        pages_dist = self.normalized_numerical_distance('pages', book1['pages'], book2['pages'])
-        total_distance += weights['pages'] * pages_dist
+        numerical_dist = self.manhattan_distance(book1_idx, book2_idx)
+        total_distance += weights['numerical'] * numerical_dist
         
         # Категориальные признаки
         author_dist = self.categorical_distance(book1['author'], book2['author'])
@@ -186,8 +202,7 @@ class BookDistanceMetrics:
         total_distance += weights['language'] * language_dist
 
         # Бинарные признаки
-        ill_dist = self.bin_distance(
-                                                      book1['has_illustrations'], book2['has_illustrations'])
+        ill_dist = self.bin_distance(book1['has_illustrations'], book2['has_illustrations'])
         total_distance += weights['has_illustrations'] * ill_dist
 
         return total_distance
