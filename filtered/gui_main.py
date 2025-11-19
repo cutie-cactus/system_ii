@@ -331,8 +331,18 @@ class BookRecommendationGUI:
             
             messagebox.showinfo("Успех", f"Найдено {len(self.filtered_df)} книг")
             
-        except ValueError as e:
-            messagebox.showerror("Ошибка", "Проверьте правильность введенных значений")
+        except ValueError as e:        
+            if str(e) == 'Found array with 0 sample(s) (shape=(0, 1)) while a minimum of 1 is required by MinMaxScaler.':        
+                # Ошибка преобразования типов (ввод строки вместо числа)        
+                messagebox.showerror("Ошибка", "По вашему запросу ничего не найдено, изменьте фильтры")        
+            else:        
+                messagebox.showerror("Ошибка ввода", "Введены некорректные значения")
+
+        # except ValueError as e:
+        #     messagebox.showinfo("Успех", "Не найдено книг с указанными фильтрами")
+            
+        # except:
+        #     messagebox.showinfo("Ошибка", "Не найдено книг с указанными фильтрами")
     
     def reset_filters(self):
         # Сброс множественного выбора жанров, авторов и издательств
