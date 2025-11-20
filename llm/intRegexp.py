@@ -1,7 +1,7 @@
 import json
 import sys
 from typing import Dict, Any
-from regexp import process_query  # Импортируем regex-парсер
+from regexpImproved import process_query  # Импортируем regex-парсер
 
 class BookRecommendationInterface:
     """

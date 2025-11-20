@@ -139,29 +139,245 @@ class BookRecommendationSystem:
         """
         Определение типа вопроса по содержимому
         """
-        # Если есть likes/dislikes - это рекомендации
-        feedback = query_json.get("feedback", {})
-        if feedback.get("likes") or feedback.get("dislikes"):
-            return "recommendation"
-        
-        # Если есть сравнение книг
-        compare = query_json.get("compare", {})
-        if compare.get("count_books") and int(compare.get("count_books", 0)) >= 2:
-            return "comparison"
-        
-        # Если есть фильтры - это поиск
-        filters = query_json.get("filter", {})
-        if any(filters.values()):
-            return "search"
-        
-        # Специальные команды
+        # Сначала проверяем специальные команды
         if query_json.get("step_back"):
             return "step_back"
         
         if query_json.get("num_question"):
             return "other"
         
+        # Затем проверяем сравнение
+        compare = query_json.get("compare", {})
+        if compare.get("count_books") and int(compare.get("count_books", 0)) >= 2:
+            return "comparison"
+        
+        # Затем рекомендации (по наличию likes/dislikes)
+        feedback = query_json.get("feedback", {})
+        if feedback.get("likes") or feedback.get("dislikes"):
+            return "recommendation"
+        
+        # Затем общие вопросы (ищем конкретную книгу)
+        filters = query_json.get("filter", {})
+        # Если есть только один конкретный фильтр, это может быть общий вопрос
+        if (filters.get("author") and len(filters.get("author", [])) == 1 and 
+            not any(filters.get(key) for key in ["publisher", "year_from", "year_to", "language", "age_restriction", "genre", "pages_from", "pages_to", "has_illustrations"] if filters.get(key))):
+            return "general"
+        
+        # Если есть любые фильтры - это поиск
+        if any(filters.values()):
+            return "search"
+        
         return ""
+
+    def _handle_recommendation(self, query_json: Dict[str, Any]) -> Dict[str, Any]:
+        """Обработка рекомендательных запросов"""
+        filters = query_json.get("filter", {})
+        feedback = query_json.get("feedback", {})
+        
+        # Обновляем текущие фильтры с учетом фидбека
+        self._update_filters_with_feedback(filters, feedback)
+        
+        # Применяем фильтры
+        filtered_books = self._apply_filters(self.df, self.current_filters)
+        
+        # Если есть лайки, ищем похожие книги
+        likes = feedback.get("likes", [])
+        dislikes = feedback.get("dislikes", [])
+        
+        if likes:
+            similar_books = self._find_similar_books(likes, filtered_books)
+            if similar_books:
+                message = self._format_recommendation_message(similar_books, likes)
+                return self._create_response(similar_books, message)
+            else:
+                # Если не нашли похожих, показываем что есть с учетом дизлайков
+                if dislikes:
+                    filtered_books = self._exclude_similar_books(dislikes, filtered_books)
+                message = "Не найдено похожих книг на ваши предпочтения. Вот другие книги, которые могут вам понравиться:"
+                return self._create_response(filtered_books.to_dict('records')[:10], message)
+        
+        # Если есть только дизлайки, исключаем похожие
+        if dislikes:
+            filtered_books = self._exclude_similar_books(dislikes, filtered_books)
+            message = "Исключили книги, похожие на те, что вам не нравятся:"
+            return self._create_response(filtered_books.to_dict('records'), message)
+        
+        # Если нет ни лайков, ни дизлайков, но тип recommendation
+        message = "Пожалуйста, укажите, какие книги вам нравятся, чтобы я мог подобрать рекомендации."
+        return self._create_response([], message)
+
+    def _find_book_by_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Поиск книги по названию (более гибкий)"""
+        if self.df.empty:
+            return None
+        
+        # Приводим к нижнему регистру для поиска
+        title_lower = title.lower().strip()
+        
+        # Сначала точное совпадение
+        exact_match = self.df[self.df['title'].str.lower() == title_lower]
+        if not exact_match.empty:
+            return exact_match.iloc[0].to_dict()
+        
+        # Затем частичное совпадение (содержит строку)
+        partial_match = self.df[self.df['title'].str.lower().str.contains(title_lower, na=False)]
+        if not partial_match.empty:
+            return partial_match.iloc[0].to_dict()
+        
+        # Затем поиск по началу названия
+        start_match = self.df[self.df['title'].str.lower().str.startswith(title_lower)]
+        if not start_match.empty:
+            return start_match.iloc[0].to_dict()
+        
+        return None
+
+    def _find_similar_books(self, liked_titles: List[str], base_books: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Поиск книг, похожих на понравившиеся"""
+        similar_books = []
+        
+        for title in liked_titles:
+            book = self._find_book_by_title(title)
+            if book is not None:
+                # Ищем книги того же автора
+                if book.get('author'):
+                    author_books = base_books[base_books['author'] == book['author']]
+                    similar_books.extend(author_books.to_dict('records'))
+                
+                # Ищем книги того же жанра
+                if isinstance(book.get('genre'), str):
+                    # Разбиваем жанры по запятым и ищем книги с любым из этих жанров
+                    genres = [g.strip().lower() for g in book['genre'].split(',')]
+                    for genre in genres:
+                        if genre:
+                            genre_books = base_books[base_books['genre'].str.lower().str.contains(genre, na=False)]
+                            similar_books.extend(genre_books.to_dict('records'))
+        
+        # Удаляем дубликаты и уже понравившиеся книги
+        seen_ids = set()
+        unique_books = []
+        
+        for book in similar_books:
+            book_id = book.get('id')
+            book_title = book.get('title', '').lower()
+            
+            # Проверяем, не является ли книга одной из понравившихся
+            is_liked = any(liked_title.lower() in book_title or book_title in liked_title.lower() 
+                        for liked_title in liked_titles)
+            
+            if book_id and book_id not in seen_ids and not is_liked:
+                seen_ids.add(book_id)
+                unique_books.append(book)
+        
+        return unique_books[:10]  # Ограничиваем количество рекомендаций
+
+    def _apply_filters(self, df: pd.DataFrame, filters: Dict[str, Any]) -> pd.DataFrame:
+        """Применение фильтров к DataFrame"""
+        filtered_df = df.copy()
+        
+        # Фильтрация по автору (массив)
+        authors = filters.get("author", [])
+        if authors and any(authors):
+            author_conditions = []
+            for author in authors:
+                if author:
+                    author_conditions.append(filtered_df['author'].str.lower().str.contains(author.lower(), na=False))
+            if author_conditions:
+                combined_condition = author_conditions[0]
+                for condition in author_conditions[1:]:
+                    combined_condition |= condition
+                filtered_df = filtered_df[combined_condition]
+        
+        # Фильтрация по издателю (массив)
+        publishers = filters.get("publisher", [])
+        if publishers and any(publishers):
+            publisher_conditions = []
+            for publisher in publishers:
+                if publisher:
+                    publisher_conditions.append(filtered_df['publisher'].str.lower().str.contains(publisher.lower(), na=False))
+            if publisher_conditions:
+                combined_condition = publisher_conditions[0]
+                for condition in publisher_conditions[1:]:
+                    combined_condition |= condition
+                filtered_df = filtered_df[combined_condition]
+        
+        # Фильтрация по году
+        year_from = filters.get("year_from")
+        if year_from:
+            try:
+                filtered_df = filtered_df[filtered_df['year'] >= int(year_from)]
+            except (ValueError, TypeError):
+                pass
+        
+        year_to = filters.get("year_to")
+        if year_to:
+            try:
+                filtered_df = filtered_df[filtered_df['year'] <= int(year_to)]
+            except (ValueError, TypeError):
+                pass
+        
+        # Фильтрация по языку (массив)
+        languages = filters.get("language", [])
+        if languages and any(languages):
+            language_conditions = []
+            for language in languages:
+                if language:
+                    language_conditions.append(filtered_df['language'].str.lower().str.contains(language.lower(), na=False))
+            if language_conditions:
+                combined_condition = language_conditions[0]
+                for condition in language_conditions[1:]:
+                    combined_condition |= condition
+                filtered_df = filtered_df[combined_condition]
+        
+        # Фильтрация по возрастному ограничению (массив)
+        age_restrictions = filters.get("age_restriction", [])
+        if age_restrictions and any(age_restrictions):
+            age_conditions = []
+            for age in age_restrictions:
+                if age:
+                    age_conditions.append(filtered_df['age_restriction'].str.contains(age, na=False))
+            if age_conditions:
+                combined_condition = age_conditions[0]
+                for condition in age_conditions[1:]:
+                    combined_condition |= condition
+                filtered_df = filtered_df[combined_condition]
+        
+        # Фильтрация по жанру (массив)
+        genres = filters.get("genre", [])
+        if genres and any(genres):
+            genre_conditions = []
+            for genre in genres:
+                if genre:
+                    genre_conditions.append(filtered_df['genre'].str.lower().str.contains(genre.lower(), na=False))
+            if genre_conditions:
+                combined_condition = genre_conditions[0]
+                for condition in genre_conditions[1:]:
+                    combined_condition |= condition
+                filtered_df = filtered_df[combined_condition]
+        
+        # Фильтрация по количеству страниц
+        pages_from = filters.get("pages_from")
+        if pages_from:
+            try:
+                filtered_df = filtered_df[filtered_df['pages'] >= int(pages_from)]
+            except (ValueError, TypeError):
+                pass
+        
+        pages_to = filters.get("pages_to")
+        if pages_to:
+            try:
+                filtered_df = filtered_df[filtered_df['pages'] <= int(pages_to)]
+            except (ValueError, TypeError):
+                pass
+        
+        # Фильтрация по наличию иллюстраций
+        has_illustrations = filters.get("has_illustrations")
+        if has_illustrations:
+            if has_illustrations.lower() == "true":
+                filtered_df = filtered_df[filtered_df['has_illustrations'] == True]
+            elif has_illustrations.lower() == "false":
+                filtered_df = filtered_df[filtered_df['has_illustrations'] == False]
+        
+        return filtered_df
     
     def _handle_step_back(self, query_json: Dict[str, Any]) -> Dict[str, Any]:
         """Обработка шага назад по истории"""
