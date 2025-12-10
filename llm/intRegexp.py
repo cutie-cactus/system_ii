@@ -2,6 +2,7 @@ import json
 import sys
 from typing import Dict, Any
 from regexpImproved import process_query  # Импортируем regex-парсер
+import pandas as pd
 
 class BookRecommendationInterface:
     """
@@ -103,6 +104,7 @@ class BookRecommendationInterface:
         # 1. Парсим запрос с помощью regex-парсера
         print("🤖 Анализирую запрос...")
         parsed_result = process_query(user_query)
+        print(parsed_result)
         
         # Преобразуем JSON строку в словарь
         try:
@@ -117,7 +119,10 @@ class BookRecommendationInterface:
         
         # 2. Передаем в рекомендательную систему
         print("📊 Обрабатываю запрос в рекомендательной системе...")
-        result = self.recommendation_system.process_query(parsed_query)
+
+        result = self.recommendation_system.process_request(parsed_query)
+        print(result)
+
         
         # 3. Выводим результат пользователю
         self._show_result(result)
@@ -171,9 +176,9 @@ class BookRecommendationInterface:
         print("\n🎯 РЕЗУЛЬТАТ:")
         print("─" * 40)
         
-        if not result.get("success", False):
-            print("❌ " + result.get("message", "Произошла ошибка"))
-            return
+        # if not result.get("success", False):
+        #     print("❌ " + result.get("message", "Произошла ошибка"))
+        #     return
         
         # Основное сообщение
         print("✅ " + result.get("message", ""))
@@ -332,10 +337,12 @@ def main():
     """
     try:
         # Инициализация компонентов
-        from funcDialog import BookRecommendationSystem
+        from newFuncJson import BookAssistant
         
         # Создаем экземпляры
-        recommendation_system = BookRecommendationSystem()
+        # df = pd.read_csv('../DataBooks.csv')
+
+        recommendation_system = BookAssistant()
         
         # Создаем и запускаем интерфейс
         interface = BookRecommendationInterface(recommendation_system)
