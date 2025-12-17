@@ -63,33 +63,8 @@ class NeuralBookParser:
         try:
             with open(Config.PROMPT_PATH, 'r', encoding='utf-8') as file:
                 content = file.read().strip()
-                
-                # Добавляем информацию о командах в промпт
-                enhanced_content = content + """
-
-ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ДЛЯ КОМАНД:
-
-1. Если пользователь говорит "назад", "вернись назад", "отмени последнее", "шаг назад" - 
-   используй question_type: "step_back"
-
-2. Если пользователь говорит "заново", "начать сначала", "сбросить все", "очистить" - 
-   используй question_type: "other" и num_question: "заново"
-
-3. Для добавления предпочтений используй естественные фразы:
-   - "Мне нравится [название книги]" → feedback: {"likes": ["название книги"]}
-   - "Не нравится [название книги]" → feedback: {"dislikes": ["название книги"]}
-   - "Еще мне нравится [название]" → добавляй в существующие likes
-
-4. Для фильтров сохраняй все ранее указанные критерии плюс новые:
-   - "Книги после 2020 года" → добавляй к существующим фильтрам
-   - "И еще русские книги" → добавляй language: ["русский"] к существующим фильтрам
-
-5. Все запросы на рекомендации без явного указания книг должны учитывать 
-   накопленные предпочтения (likes/dislikes) и фильтры.
-"""
-                
-                print(f"📄 Загружен промпт длиной {len(enhanced_content)} символов")
-                return enhanced_content
+                print(f"📄 Загружен промпт длиной {len(content)} символов")
+                return content
         except FileNotFoundError:
             print(f"⚠️ Файл {Config.PROMPT_PATH} не найден")
             return ""
@@ -112,7 +87,7 @@ class NeuralBookParser:
                 self.completion_url,
                 json=test_payload,
                 headers={"Content-Type": "application/json"},
-                timeout=150
+                timeout=50
             )
             
             if response.status_code == 200:
@@ -164,10 +139,12 @@ class NeuralBookParser:
                 print(f"✅ Ответ получен за {processing_time:.2f} сек")
                 
                 json_data = self._extract_json_from_response(content)
-                normalized_data = self._normalize_json_structure(json_data)
+                normalized_data = self._normalize_json_structure(json_data, user_query)
                 
                 # Логируем результат для отладки
                 print(f"📋 Распознанный тип: {normalized_data.get('question_type', 'неизвестно')}")
+                if normalized_data.get('step_back'):
+                    print(f"↩️  Step back: {normalized_data.get('step_back')}")
                 if normalized_data.get('feedback', {}).get('likes'):
                     print(f"👍 Лайки: {normalized_data['feedback']['likes']}")
                 if normalized_data.get('feedback', {}).get('dislikes'):
@@ -207,11 +184,18 @@ class NeuralBookParser:
             print(f"❌ Неожиданная ошибка при извлечении JSON: {e}")
             return self._get_empty_template()
 
-    def _normalize_json_structure(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_json_structure(self, data: Dict[str, Any], user_query: str = "") -> Dict[str, Any]:
         """Нормализация структуры JSON"""
         normalized = self._get_empty_template()
         
         if not isinstance(data, dict) or not data:
+            # Если нет данных, проверяем нераспознанные запросы
+            if user_query and len(user_query.split()) < 10:  # Короткие запросы
+                for phrase in ["привет", "здравствуй", "как дела", "спасибо", "пока", "до свидания"]:
+                    if phrase in user_query.lower():
+                        normalized["question_type"] = "other"
+                        normalized["num_question"] = "не_распознано"
+                        return normalized
             return normalized
         
         # Определение типа вопроса
@@ -238,12 +222,37 @@ class NeuralBookParser:
             }
             normalized["question_type"] = type_mapping.get(question_type.lower(), question_type)
         
-        # Проверка командных фраз
-        if 'step_back' in data and data['step_back']:
-            normalized['question_type'] = 'step_back'
-        elif 'num_question' in data and data['num_question'] == 'заново':
-            normalized['question_type'] = 'other'
-            normalized['num_question'] = 'заново'
+        # Обработка step_back
+        step_back_value = data.get('step_back', '')
+        if step_back_value:
+            normalized['step_back'] = str(step_back_value)
+            # Если есть step_back, обязательно ставим правильный тип
+            normalized["question_type"] = "step_back"
+        else:
+            # Проверяем текстовые команды для step_back
+            query_lower = user_query.lower()
+            step_back_commands = {
+                "1": ["начать сначала", "заново", "сбросить всё", "сбросить все", "очистить", "начни сначала"],
+                "-1": ["назад", "вернись назад", "отмени последнее", "шаг назад", "предыдущий"]
+            }
+            
+            for step_type, commands in step_back_commands.items():
+                for cmd in commands:
+                    if cmd in query_lower:
+                        normalized['step_back'] = step_type
+                        normalized["question_type"] = "step_back"
+                        break
+                if normalized.get('step_back'):
+                    break
+        
+        # Обработка нераспознанных запросов
+        if normalized["question_type"] == "other":
+            num_question = data.get("num_question", "")
+            if num_question == "не_распознано":
+                normalized["num_question"] = "не_распознано"
+            elif not num_question and not any(data.values()):
+                # Если все поля пустые, значит запрос не распознан
+                normalized["num_question"] = "не_распознано"
         
         # Обработка фильтров
         filter_data = data.get("filter", {})
@@ -307,14 +316,14 @@ class NeuralBookParser:
                             normalized["feedback"][field] = [str(value)]
         
         # Обработка опциональных полей
-        for field in ["num_question", "step_back"]:
+        for field in ["num_question"]:
             if field in data:
                 value = data[field]
                 if value is not None and value != "":
                     normalized[field] = str(value)
         
         # Автоматическое определение типа вопроса по содержимому
-        if not normalized["question_type"]:
+        if not normalized["question_type"] or normalized["question_type"] == "":
             if normalized["feedback"].get("likes") or normalized["feedback"].get("dislikes"):
                 normalized["question_type"] = "recommendation"
             elif normalized["compare"].get("title1") and normalized["compare"].get("title2"):
@@ -325,6 +334,9 @@ class NeuralBookParser:
                 normalized["question_type"] = "step_back"
             elif normalized.get("num_question"):
                 normalized["question_type"] = "other"
+            else:
+                normalized["question_type"] = "other"
+                normalized["num_question"] = "не_распознано"
         
         return normalized
     

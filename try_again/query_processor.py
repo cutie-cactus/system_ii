@@ -41,7 +41,7 @@ class QueryState:
         }
         
         self.history = deque(maxlen=self.MAX_HISTORY_STEPS)
-        self.history.append(self._copy_state(self.current_state))
+        self.history.append(self._deep_copy_state(self.current_state))
     
     def update(self, new_filters: Dict[str, Any], new_feedback: Dict[str, List[str]],
                filtered_books: pd.DataFrame, liked_indices: List[int], 
@@ -60,24 +60,19 @@ class QueryState:
             Объединенное текущее состояние
         """
         # Сохраняем текущее состояние в историю
-        self.history.append(self._copy_state(self.current_state))
+        self.history.append(self._deep_copy_state(self.current_state))
         
-        # Объединяем фильтры
+        # Обновляем фильтры: заменяем значения, а не добавляем
         for key, value in new_filters.items():
             if key in self.current_state['filter']:
                 if isinstance(value, list) and value:
-                    if key in ['author', 'publisher', 'language', 'age_restriction', 'genre']:
-                        # Для списков - добавляем новые элементы
-                        current = self.current_state['filter'][key]
-                        if isinstance(current, list):
-                            current.extend([v for v in value if v not in current])
-                        else:
-                            self.current_state['filter'][key] = value.copy()
-                    else:
-                        # Для одиночных значений - заменяем
-                        self.current_state['filter'][key] = value
+                    # Для списков - заменяем, если есть новые значения
+                    if value:  # Если новые значения не пустые
+                        self.current_state['filter'][key] = value.copy()
+                elif value not in ['', None]:  # Для одиночных значений
+                    self.current_state['filter'][key] = value
         
-        # Объединяем feedback (лайки/дизлайки)
+        # Обновляем feedback (лайки/дизлайки) - добавляем новые
         for key in ['likes', 'dislikes']:
             if key in new_feedback and new_feedback[key]:
                 current_list = self.current_state['feedback'][key]
@@ -86,43 +81,61 @@ class QueryState:
                         current_list.append(item)
         
         # Обновляем остальные поля
-        self.current_state['filtered_books'] = filtered_books
-        self.current_state['liked_indices'] = liked_indices
-        self.current_state['disliked_indices'] = disliked_indices
+        self.current_state['filtered_books'] = filtered_books.copy() if filtered_books is not None else None
+        self.current_state['liked_indices'] = liked_indices.copy()
+        self.current_state['disliked_indices'] = disliked_indices.copy()
         
         return self.current_state
     
-    def step_back(self) -> Optional[Dict[str, Any]]:
+    def step_back(self, step_type: str = "-1") -> Optional[Dict[str, Any]]:
         """
-        Возврат на шаг назад
+        Возврат на шаг назад или начало сначала
+        
+        Args:
+            step_type: "-1" - один шаг назад, "1" - начало сначала
         
         Returns:
             Предыдущее состояние или None, если история пуста
         """
-        if len(self.history) > 1:
-            # Удаляем текущее состояние
-            self.history.pop()
-            # Восстанавливаем предыдущее
-            self.current_state = self._copy_state(self.history[-1])
+        if step_type == "1":  # Начало сначала
+            self.reset()
             return self.current_state
+        elif step_type == "-1":  # Один шаг назад
+            if len(self.history) > 1:
+                # Удаляем текущее состояние
+                self.history.pop()
+                # Восстанавливаем предыдущее
+                self.current_state = self._deep_copy_state(self.history[-1])
+                return self.current_state
         return None
     
     def get_current_state(self) -> Dict[str, Any]:
         """Получение копии текущего состояния"""
-        return self._copy_state(self.current_state)
+        return self._deep_copy_state(self.current_state)
     
-    def _copy_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _deep_copy_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Создание глубокой копии состояния"""
+        # Копируем фильтры
+        filter_copy = {}
+        for key, value in state['filter'].items():
+            if isinstance(value, list):
+                filter_copy[key] = value.copy()
+            else:
+                filter_copy[key] = value
+        
+        # Копируем feedback
+        feedback_copy = {
+            'likes': state['feedback']['likes'].copy(),
+            'dislikes': state['feedback']['dislikes'].copy()
+        }
+        
+        # Копируем DataFrame если он есть
+        filtered_books_copy = state['filtered_books'].copy() if state['filtered_books'] is not None else None
+        
         return {
-            'filter': {
-                key: (value.copy() if isinstance(value, list) else value)
-                for key, value in state['filter'].items()
-            },
-            'feedback': {
-                'likes': state['feedback']['likes'].copy(),
-                'dislikes': state['feedback']['dislikes'].copy()
-            },
-            'filtered_books': state['filtered_books'].copy() if state['filtered_books'] is not None else None,
+            'filter': filter_copy,
+            'feedback': feedback_copy,
+            'filtered_books': filtered_books_copy,
             'liked_indices': state['liked_indices'].copy(),
             'disliked_indices': state['disliked_indices'].copy()
         }
@@ -132,7 +145,8 @@ class QueryState:
         return {
             'current_step': len(self.history),
             'max_steps': self.MAX_HISTORY_STEPS,
-            'can_go_back': len(self.history) > 1
+            'can_go_back': len(self.history) > 1,
+            'history_size': len(self.history)
         }
 
 
@@ -170,16 +184,31 @@ class QueryProcessor:
             'disliked_indices': [],
             'comparison_books': [],
             'message': '',
-            'history_info': self.state.get_history_info()
+            'history_info': self.state.get_history_info(),
+            'step_back_type': parsed_query.get('step_back', '')
         }
         
         query_type = parsed_query.get('question_type', '')
+        step_back_type = parsed_query.get('step_back', '')
         
-        # Обработка специальных команд
-        if query_type == 'step_back':
-            return self._handle_step_back()
-        elif query_type == 'other' and parsed_query.get('num_question') == 'заново':
+        # Обработка команды "шаг назад" или "начать сначала"
+        if query_type == 'step_back' and step_back_type:
+            return self._handle_step_back(step_back_type)
+        
+        # Обработка команды "заново" через other
+        if query_type == 'other' and parsed_query.get('num_question') == 'заново':
             return self._handle_reset()
+        
+        # Обработка нераспознанных запросов
+        if query_type == 'other' and parsed_query.get('num_question') == 'не_распознано':
+            return {
+                'query_type': 'other',
+                'message': 'Извините, я не могу ответить на ваш вопрос',
+                'filtered_books': self.state.current_state['filtered_books'],
+                'liked_indices': self.state.current_state['liked_indices'],
+                'disliked_indices': self.state.current_state['disliked_indices'],
+                'history_info': self.state.get_history_info()
+            }
         
         # Получаем текущее состояние
         current_state = self.state.get_current_state()
@@ -190,7 +219,7 @@ class QueryProcessor:
             new_filters = self._extract_filters(parsed_query.get('filter', {}))
             result['new_filters'] = new_filters
             
-            # Объединяем с текущими фильтрами
+            # Объединяем с текущими фильтрами (ЗАМЕНЯЕМ, а не добавляем)
             combined_filters = self._combine_filters(current_state['filter'], new_filters)
             
             # Применяем объединенные фильтры
@@ -263,48 +292,43 @@ class QueryProcessor:
         
         return result
     
-    def _handle_step_back(self) -> Dict[str, Any]:
-        """Обработка команды 'назад'"""
-        previous_state = self.state.step_back()
+    def _handle_step_back(self, step_type: str) -> Dict[str, Any]:
+        """Обработка команды 'шаг назад' или 'начать сначала'"""
+        previous_state = self.state.step_back(step_type)
         
         if previous_state is None:
             return {
                 'query_type': 'step_back',
+                'step_back_type': step_type,
                 'message': '❌ Невозможно вернуться назад - история пуста',
                 'history_info': self.state.get_history_info()
             }
         
-        # Обновляем метрики для восстановленного состояния
-        if previous_state['filtered_books'] is not None:
-            self.metrics_filtered = BookDistanceMetrics(previous_state['filtered_books'])
+        # Для команды "начать сначала" сбрасываем фильтры в data_loader
+        if step_type == "1":
+            self.data_loader.reset_filters()
+            self.metrics_filtered = BookDistanceMetrics(self.data_loader.df)
+            message = '🔄 Начинаем заново. Все фильтры и предпочтения сброшены.'
+        else:
+            # Обновляем метрики для восстановленного состояния
+            if previous_state['filtered_books'] is not None:
+                self.metrics_filtered = BookDistanceMetrics(previous_state['filtered_books'])
+            message = '↩️  Возврат на шаг назад'
         
         return {
             'query_type': 'step_back',
+            'step_back_type': step_type,
             'filtered_books': previous_state['filtered_books'],
             'liked_indices': previous_state['liked_indices'],
             'disliked_indices': previous_state['disliked_indices'],
-            'message': '↩️  Возврат на шаг назад',
+            'message': message,
             'history_info': self.state.get_history_info()
         }
     
     def _handle_reset(self) -> Dict[str, Any]:
-        """Обработка команды 'заново'"""
-        self.state.reset()
-        
-        # Сбрасываем фильтры в data_loader
-        self.data_loader.reset_filters()
-        
-        # Инициализируем метрики заново
-        self.initialize_metrics()
-        
-        return {
-            'query_type': 'reset',
-            'filtered_books': self.data_loader.df.copy(),
-            'liked_indices': [],
-            'disliked_indices': [],
-            'message': '🔄 Начинаем заново. Все фильтры и предпочтения сброшены.',
-            'history_info': self.state.get_history_info()
-        }
+        """Обработка команды 'заново' через other"""
+        # Используем step_back с типом "1" для начала сначала
+        return self._handle_step_back("1")
     
     def _extract_filters(self, filters: Dict[str, Any]) -> Dict[str, Any]:
         """Извлечение фильтров из распарсенного запроса"""
@@ -357,17 +381,14 @@ class QueryProcessor:
         return extracted
     
     def _combine_filters(self, current: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-        """Объединение текущих и новых фильтров"""
+        """Объединение текущих и новых фильтров (ЗАМЕНА значений, а не добавление)"""
         combined = current.copy()
         
         for key, value in new.items():
             if key in combined:
                 if isinstance(value, list) and value:
-                    # Для списков - добавляем новые элементы
-                    if isinstance(combined[key], list):
-                        combined[key].extend([v for v in value if v not in combined[key]])
-                    else:
-                        combined[key] = value.copy()
+                    # Для списков - заменяем, если новые значения не пустые
+                    combined[key] = value.copy()
                 elif value:  # Для одиночных значений - заменяем
                     combined[key] = value
         
@@ -408,14 +429,20 @@ class QueryProcessor:
             
             # Формируем информативное сообщение
             filter_info = []
-            if 'genre' in filter_criteria:
+            if 'genre' in filter_criteria and filter_criteria['genre']:
                 filter_info.append(f"жанры: {', '.join(filter_criteria['genre'])}")
-            if 'author' in filter_criteria:
+            if 'author' in filter_criteria and filter_criteria['author']:
                 filter_info.append(f"авторы: {', '.join(filter_criteria['author'])}")
-            if 'year_from' in filter_criteria or 'year_to' in filter_criteria:
-                year_from = filter_criteria.get('year_from', 'любой')
-                year_to = filter_criteria.get('year_to', 'любой')
-                filter_info.append(f"год: {year_from}-{year_to}")
+            if 'year_from' in filter_criteria:
+                filter_info.append(f"год от: {filter_criteria['year_from']}")
+            if 'year_to' in filter_criteria:
+                filter_info.append(f"год до: {filter_criteria['year_to']}")
+            if 'pages_from' in filter_criteria:
+                filter_info.append(f"страниц от: {filter_criteria['pages_from']}")
+            if 'pages_to' in filter_criteria:
+                filter_info.append(f"страниц до: {filter_criteria['pages_to']}")
+            if 'language' in filter_criteria and filter_criteria['language']:
+                filter_info.append(f"язык: {', '.join(filter_criteria['language'])}")
             
             if filter_info:
                 result['message'] = f"Применены фильтры: {'; '.join(filter_info)}. "
@@ -447,7 +474,7 @@ class QueryProcessor:
             if value:
                 if isinstance(value, list) and value:
                     info['active_filters'][key] = value
-                elif value not in ['', 0, False]:
+                elif value not in ['', 0, False, None]:
                     info['active_filters'][key] = value
         
         return info

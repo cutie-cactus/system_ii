@@ -84,7 +84,7 @@ class BookRecommendationSystem:
             parsed_query = self.neural_parser.parse_query(query)
             
             if not parsed_query or not parsed_query.get('question_type'):
-                result["message"] = "Не удалось распознать запрос"
+                result["message"] = "Извините, я не могу ответить на ваш вопрос"
                 return result
             
             result["query_type"] = parsed_query.get('question_type', '')
@@ -96,7 +96,13 @@ class BookRecommendationSystem:
             result["state_info"] = self.query_processor.get_current_state_info()
             result["history_info"] = processed.get("history_info", {})
             
-            # 4. Выполнение действий в зависимости от типа запроса
+            # 4. Проверяем на нераспознанный запрос
+            if result["query_type"] == "other" and processed.get("message") == "Извините, я не могу ответить на ваш вопрос":
+                result["message"] = processed["message"]
+                result["success"] = True
+                return result
+            
+            # 5. Выполнение действий в зависимости от типа запроса
             if result["query_type"] == "recommendation":
                 recommendations = self._handle_recommendation(processed)
                 result["data"] = recommendations
@@ -125,7 +131,7 @@ class BookRecommendationSystem:
                 result["message"] = processed.get("message", "")
             
             else:
-                result["message"] = f"Тип запроса '{result['query_type']}' пока не поддерживается"
+                result["message"] = "Извините, я не могу ответить на ваш вопрос"
             
             result["success"] = True
             
@@ -225,13 +231,15 @@ class BookRecommendationSystem:
         print("💬 ИНТЕРАКТИВНЫЙ РЕЖИМ С ИСТОРИЕЙ")
         print("=" * 60)
         print("Доступные команды:")
-        print("  • 'назад' - вернуться на шаг назад")
-        print("  • 'заново' - начать с чистого листа")
+        print("  • 'назад' - вернуться на шаг назад (step_back: -1)")
+        print("  • 'начать сначала' - начать с чистого листа (step_back: 1)")
         print("  • 'выход' - завершить работу")
-        print("\nМожете задавать запросы в естественной форме:")
+        print("\nПримеры запросов:")
         print("  • 'Мне нравится Гарри Поттер'")
         print("  • 'Не нравится Война и мир'")
         print("  • 'Книги после 2020 года'")
+        print("  • 'Короткие книги про любовь'")
+        print("  • 'Очень длинная книга'")
         print("  • 'Рекомендуй что-то похожее'")
         print("=" * 60)
         
@@ -247,7 +255,14 @@ class BookRecommendationSystem:
                 
                 # Показываем активные фильтры
                 if state_info['active_filters']:
-                    print(f"  Активные фильтры: {', '.join(state_info['active_filters'].keys())}")
+                    print(f"  Активные фильтры:")
+                    for key, value in state_info['active_filters'].items():
+                        if isinstance(value, list):
+                            print(f"    - {key}: {', '.join(value[:3])}")
+                            if len(value) > 3:
+                                print(f"      ... и еще {len(value) - 3}")
+                        else:
+                            print(f"    - {key}: {value}")
                 
                 # Получаем запрос
                 print("\n" + "-" * 40)
@@ -280,16 +295,19 @@ class BookRecommendationSystem:
         
         query_type = result.get("query_type", "")
         data = result.get("data")
-        state_info = result.get("state_info", {})
         
-        print(f"\n📋 Тип запроса: {query_type}")
-        
-        # Показываем сообщение о результате
+        # Выводим сообщение о результате
         if result.get("message"):
-            print(f"📝 {result.get('message')}")
+            print(f"\n📝 {result.get('message')}")
         
-        # Показываем информацию о состоянии для команд
-        if query_type in ["step_back", "reset"]:
+        # Если запрос не распознан
+        if query_type == "other" and result.get("message") == "Извините, я не могу ответить на ваш вопрос":
+            print(f"\n⚠️  {result.get('message')}")
+            return
+        
+        # Для команд step_back показываем состояние
+        if query_type == "step_back":
+            state_info = result.get("state_info", {})
             if state_info.get('preferences'):
                 likes = state_info['preferences'].get('likes', [])
                 dislikes = state_info['preferences'].get('dislikes', [])
@@ -310,25 +328,9 @@ class BookRecommendationSystem:
             liked_books = data.get("liked_books", [])
             disliked_books = data.get("disliked_books", [])
             
-            print(f"\n🎯 РЕКОМЕНДАЦИИ НА ОСНОВЕ:")
-            
-            if liked_books:
-                print(f"👍 Понравилось ({len(liked_books)}):")
-                for i, book in enumerate(liked_books[:3], 1):
-                    print(f"   {i}. {book['title']} - {book['author']}")
-                if len(liked_books) > 3:
-                    print(f"   ... и еще {len(liked_books) - 3} книг")
-            
-            if disliked_books:
-                print(f"\n👎 Не понравилось ({len(disliked_books)}):")
-                for i, book in enumerate(disliked_books[:3], 1):
-                    print(f"   {i}. {book['title']} - {book['author']}")
-                if len(disliked_books) > 3:
-                    print(f"   ... и еще {len(disliked_books) - 3} книг")
-            
-            print(f"\n📚 РЕКОМЕНДАЦИИ ({len(recommendations)}):")
-            
             if recommendations:
+                print(f"\n🎯 РЕКОМЕНДАЦИИ ({len(recommendations)}):")
+                
                 for i, rec in enumerate(recommendations, 1):
                     book = rec["book"]
                     similarity = rec["similarity"]
@@ -336,7 +338,7 @@ class BookRecommendationSystem:
                     print(f"   Жанр: {book['genre']}, Год: {book['year']}, Страниц: {book['pages']}")
                     print(f"   Схожесть: {similarity:.3f}")
             else:
-                print("Не найдено подходящих рекомендаций")
+                print("\n❌ Не найдено подходящих рекомендаций")
         
         elif query_type in ["search", "general"] and data is not None:
             print(f"\n🔍 РЕЗУЛЬТАТЫ ПОИСКА ({len(data)} книг):")
