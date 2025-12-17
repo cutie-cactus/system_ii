@@ -18,7 +18,7 @@ class BookRecommender:
         """
         self.metrics_full = metrics_full
         self.metrics_filtered = metrics_filtered or metrics_full
-        
+    
     def recommend_based_on_likes(self, liked_indices: List[int], disliked_indices: List[int] = None,
                                  n_recommendations: int = Config.DEFAULT_N_RECOMMENDATIONS,
                                  strategy: str = Config.DEFAULT_STRATEGY,
@@ -60,6 +60,11 @@ class BookRecommender:
             if idx in all_scores:
                 del all_scores[idx]
         
+        # Исключаем дизлайки из рекомендаций
+        for idx in disliked_indices:
+            if idx in all_scores:
+                del all_scores[idx]
+        
         # Сортируем и выбираем лучшие
         recommendations = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)
         return recommendations[:n_recommendations]
@@ -69,7 +74,15 @@ class BookRecommender:
         """
         Рекомендации на основе одной книги
         """
-        return self.metrics_filtered.get_similar_books(book_idx, n_recommendations, weights)
+        recommendations = self.metrics_filtered.get_similar_books(book_idx, n_recommendations + 1, weights)
+        
+        # Исключаем саму книгу из рекомендаций
+        filtered_recommendations = []
+        for idx, similarity in recommendations:
+            if idx != book_idx:
+                filtered_recommendations.append((idx, similarity))
+        
+        return filtered_recommendations[:n_recommendations]
     
     def compare_books(self, book1_idx: int, book2_idx: int,
                      weights: Dict[str, float] = None) -> Dict[str, Any]:
@@ -137,6 +150,7 @@ class BookRecommender:
         book_scores = {}
         
         for book_idx in range(len(self.metrics_filtered.df)):
+            # Проверяем, не является ли книга уже понравившейся
             if book_idx in liked_indices:
                 continue
                 
@@ -156,6 +170,7 @@ class BookRecommender:
         book_scores = {}
         
         for book_idx in range(len(self.metrics_filtered.df)):
+            # Проверяем, не является ли книга уже понравившейся
             if book_idx in liked_indices:
                 continue
                 
@@ -174,6 +189,7 @@ class BookRecommender:
         max_scores = {}
         
         for book_idx in range(len(self.metrics_filtered.df)):
+            # Проверяем, не является ли книга уже понравившейся
             if book_idx in liked_indices:
                 continue
                 
@@ -197,6 +213,7 @@ class BookRecommender:
         penalized_scores = {}
         
         for book_idx, similarity in all_scores.items():
+            # Проверяем, не является ли книга уже непонравившейся
             if book_idx in disliked_indices:
                 continue
                 
@@ -232,6 +249,10 @@ class BookRecommender:
         
         # Усиливаем книги с общими признаками
         for book_idx in boosted_scores:
+            # Пропускаем книги, которые уже в лайках
+            if book_idx in liked_indices:
+                continue
+                
             book = self.metrics_filtered.df.iloc[book_idx]
             
             boost = 1.0
