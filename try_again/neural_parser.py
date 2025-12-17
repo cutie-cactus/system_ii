@@ -212,9 +212,6 @@ class NeuralBookParser:
                 "find": "search",
                 "compare": "comparison",
                 "comparison": "comparison",
-                "general_question": "general",
-                "general": "general",
-                "question": "general",
                 "step_back": "step_back",
                 "back": "step_back",
                 "return": "step_back",
@@ -281,10 +278,11 @@ class NeuralBookParser:
                         else:
                             normalized["filter"][field] = str(value)
         
-        # Обработка сравнения
+        # Обработка сравнения - ТОЛЬКО названия книг
         compare_data = data.get("compare", {})
         if isinstance(compare_data, dict):
-            for field in normalized["compare"]:
+            # Обрабатываем только title1 и title2
+            for field in ["title1", "title2"]:
                 if field in compare_data:
                     value = compare_data[field]
                     if value is not None and value != "":
@@ -314,6 +312,10 @@ class NeuralBookParser:
                             normalized["feedback"][field] = [value]
                         elif value:
                             normalized["feedback"][field] = [str(value)]
+        
+        # ВРУЧНУЮ конвертируем тип вопроса если есть feedback
+        if (normalized["feedback"].get("likes") or normalized["feedback"].get("dislikes")) and normalized["question_type"] != "step_back":
+            normalized["question_type"] = "recommendation"
         
         # Обработка опциональных полей
         for field in ["num_question"]:
@@ -358,9 +360,7 @@ class NeuralBookParser:
             },
             "compare": {
                 "title1": "",
-                "author1": "",
-                "title2": "",
-                "author2": ""
+                "title2": ""
             },
             "feedback": {
                 "likes": [],

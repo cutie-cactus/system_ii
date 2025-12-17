@@ -23,7 +23,7 @@ class Config:
     }
     
     # Настройки рекомендаций
-    DEFAULT_N_RECOMMENDATIONS = 5
+    DEFAULT_N_RECOMMENDATIONS = 7
     DEFAULT_STRATEGY = 'combined'
     DEFAULT_PENALTY_FACTOR = 0.7
     

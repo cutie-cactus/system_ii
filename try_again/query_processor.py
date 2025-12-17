@@ -214,7 +214,7 @@ class QueryProcessor:
         current_state = self.state.get_current_state()
         
         # Для новых запросов применяем наслоение
-        if query_type in ['search', 'general', 'recommendation']:
+        if query_type in ['search', 'recommendation']:  # Убрали 'general'
             # Извлекаем новые фильтры из запроса
             new_filters = self._extract_filters(parsed_query.get('filter', {}))
             result['new_filters'] = new_filters
@@ -257,7 +257,7 @@ class QueryProcessor:
                 result['message'] += "\n⚠️ Не найдены книги из списка 'не понравилось'"
         
         # Обновляем состояние
-        if query_type in ['search', 'general', 'recommendation']:
+        if query_type in ['search', 'recommendation']:  # Убрали 'general'
             updated_state = self.state.update(
                 new_filters=result['new_filters'],
                 new_feedback=result['new_feedback'],
@@ -275,12 +275,11 @@ class QueryProcessor:
         elif query_type == 'comparison':
             compare = parsed_query.get('compare', {})
             title1 = compare.get('title1', '')
-            author1 = compare.get('author1', '')
             title2 = compare.get('title2', '')
-            author2 = compare.get('author2', '')
             
-            book1 = self.data_loader.get_book_by_title_author(title1, author1)
-            book2 = self.data_loader.get_book_by_title_author(title2, author2)
+            # Ищем книги только по названиям
+            book1 = self.data_loader.get_book_by_title_author(title1, None)
+            book2 = self.data_loader.get_book_by_title_author(title2, None)
             
             if book1 is not None:
                 result['comparison_books'].append(book1)
@@ -462,8 +461,8 @@ class QueryProcessor:
             'preferences': {
                 'likes_count': len(state['feedback']['likes']),
                 'dislikes_count': len(state['feedback']['dislikes']),
-                'likes': state['feedback']['likes'][:5],  # Первые 5 для показа
-                'dislikes': state['feedback']['dislikes'][:5]
+                'likes': state['feedback']['likes'],  # ВСЕ лайки
+                'dislikes': state['feedback']['dislikes']  # ВСЕ дизлайки
             },
             'books_count': len(state['filtered_books']) if state['filtered_books'] is not None else 0,
             'history': self.state.get_history_info()

@@ -108,7 +108,7 @@ class BookRecommendationSystem:
                 result["data"] = recommendations
                 result["message"] = processed.get("message", "")
                 
-            elif result["query_type"] in ["search", "general"]:
+            elif result["query_type"] == "search":  # Убрали general
                 result["data"] = processed.get("filtered_books")
                 result["message"] = processed.get("message", "")
                 
@@ -221,6 +221,42 @@ class BookRecommendationSystem:
         
         return comparison_result
     
+    def _display_current_state(self, state_info: Dict[str, Any]):
+        """Отображение текущего состояния системы"""
+        print(f"\n📊 ТЕКУЩЕЕ СОСТОЯНИЕ:")
+        print(f"  Книг в фильтре: {state_info['books_count']}")
+        print(f"  История: шаг {state_info['history']['current_step']} из {state_info['history']['max_steps']}")
+        
+        # Показываем ВСЕ лайки
+        likes = state_info['preferences'].get('likes', [])
+        if likes:
+            print(f"\n👍 ПОНРАВИЛИСЬ ({len(likes)}):")
+            for i, book in enumerate(likes, 1):
+                print(f"  {i}. {book}")
+        else:
+            print(f"\n👍 ПОНРАВИЛИСЬ: нет")
+        
+        # Показываем ВСЕ дизлайки
+        dislikes = state_info['preferences'].get('dislikes', [])
+        if dislikes:
+            print(f"\n👎 НЕ ПОНРАВИЛИСЬ ({len(dislikes)}):")
+            for i, book in enumerate(dislikes, 1):
+                print(f"  {i}. {book}")
+        else:
+            print(f"\n👎 НЕ ПОНРАВИЛИСЬ: нет")
+        
+        # Показываем ВСЕ активные фильтры
+        active_filters = state_info.get('active_filters', {})
+        if active_filters:
+            print(f"\n🔍 АКТИВНЫЕ ФИЛЬТРЫ:")
+            for key, value in active_filters.items():
+                if isinstance(value, list):
+                    print(f"  • {key}: {', '.join(value)}")
+                else:
+                    print(f"  • {key}: {value}")
+        else:
+            print(f"\n🔍 АКТИВНЫЕ ФИЛЬТРЫ: нет")
+    
     def interactive_mode(self):
         """Интерактивный режим работы с поддержкой истории"""
         if not self.initialized:
@@ -240,30 +276,12 @@ class BookRecommendationSystem:
         print("  • 'Книги после 2020 года'")
         print("  • 'Короткие книги про любовь'")
         print("  • 'Очень длинная книга'")
+        print("  • 'Сравни Войну и мир и Анну Каренину'")
         print("  • 'Рекомендуй что-то похожее'")
         print("=" * 60)
         
         while True:
             try:
-                # Показываем текущее состояние
-                state_info = self.query_processor.get_current_state_info()
-                print(f"\n📊 Текущее состояние:")
-                print(f"  Книг в фильтре: {state_info['books_count']}")
-                print(f"  Понравилось: {state_info['preferences']['likes_count']} книг")
-                print(f"  Не понравилось: {state_info['preferences']['dislikes_count']} книг")
-                print(f"  История: шаг {state_info['history']['current_step']} из {state_info['history']['max_steps']}")
-                
-                # Показываем активные фильтры
-                if state_info['active_filters']:
-                    print(f"  Активные фильтры:")
-                    for key, value in state_info['active_filters'].items():
-                        if isinstance(value, list):
-                            print(f"    - {key}: {', '.join(value[:3])}")
-                            if len(value) > 3:
-                                print(f"      ... и еще {len(value) - 3}")
-                        else:
-                            print(f"    - {key}: {value}")
-                
                 # Получаем запрос
                 print("\n" + "-" * 40)
                 query = input("🤔 Ваш запрос: ").strip()
@@ -278,6 +296,10 @@ class BookRecommendationSystem:
                 # Обрабатываем запрос
                 result = self.process_user_query(query)
                 
+                # ВЫВОДИМ ТЕКУЩЕЕ СОСТОЯНИЕ ПЕРЕД РЕЗУЛЬТАТОМ
+                if result.get("state_info"):
+                    self._display_current_state(result["state_info"])
+                
                 # Выводим результат
                 self._display_result(result)
                 
@@ -290,7 +312,7 @@ class BookRecommendationSystem:
     def _display_result(self, result: Dict[str, Any]):
         """Отображение результата обработки запроса"""
         if not result.get("success"):
-            print(f"❌ {result.get('message', 'Ошибка обработки запроса')}")
+            print(f"\n❌ {result.get('message', 'Ошибка обработки запроса')}")
             return
         
         query_type = result.get("query_type", "")
@@ -305,28 +327,9 @@ class BookRecommendationSystem:
             print(f"\n⚠️  {result.get('message')}")
             return
         
-        # Для команд step_back показываем состояние
-        if query_type == "step_back":
-            state_info = result.get("state_info", {})
-            if state_info.get('preferences'):
-                likes = state_info['preferences'].get('likes', [])
-                dislikes = state_info['preferences'].get('dislikes', [])
-                
-                if likes:
-                    print(f"\n👍 Текущие лайки: {', '.join(likes[:3])}")
-                    if len(likes) > 3:
-                        print(f"   ... и еще {len(likes) - 3} книг")
-                
-                if dislikes:
-                    print(f"\n👎 Текущие дизлайки: {', '.join(dislikes[:3])}")
-                    if len(dislikes) > 3:
-                        print(f"   ... и еще {len(dislikes) - 3} книг")
-        
         # Отображаем данные в зависимости от типа запроса
         if query_type == "recommendation" and data:
             recommendations = data.get("recommendations", [])
-            liked_books = data.get("liked_books", [])
-            disliked_books = data.get("disliked_books", [])
             
             if recommendations:
                 print(f"\n🎯 РЕКОМЕНДАЦИИ ({len(recommendations)}):")
@@ -340,7 +343,7 @@ class BookRecommendationSystem:
             else:
                 print("\n❌ Не найдено подходящих рекомендаций")
         
-        elif query_type in ["search", "general"] and data is not None:
+        elif query_type == "search" and data is not None:
             print(f"\n🔍 РЕЗУЛЬТАТЫ ПОИСКА ({len(data)} книг):")
             if len(data) > 0:
                 for i, (_, book) in enumerate(data.head(5).iterrows(), 1):
