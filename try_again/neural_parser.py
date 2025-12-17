@@ -63,8 +63,33 @@ class NeuralBookParser:
         try:
             with open(Config.PROMPT_PATH, 'r', encoding='utf-8') as file:
                 content = file.read().strip()
-                print(f"📄 Загружен промпт длиной {len(content)} символов")
-                return content
+                
+                # Добавляем информацию о командах в промпт
+                enhanced_content = content + """
+
+ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ДЛЯ КОМАНД:
+
+1. Если пользователь говорит "назад", "вернись назад", "отмени последнее", "шаг назад" - 
+   используй question_type: "step_back"
+
+2. Если пользователь говорит "заново", "начать сначала", "сбросить все", "очистить" - 
+   используй question_type: "other" и num_question: "заново"
+
+3. Для добавления предпочтений используй естественные фразы:
+   - "Мне нравится [название книги]" → feedback: {"likes": ["название книги"]}
+   - "Не нравится [название книги]" → feedback: {"dislikes": ["название книги"]}
+   - "Еще мне нравится [название]" → добавляй в существующие likes
+
+4. Для фильтров сохраняй все ранее указанные критерии плюс новые:
+   - "Книги после 2020 года" → добавляй к существующим фильтрам
+   - "И еще русские книги" → добавляй language: ["русский"] к существующим фильтрам
+
+5. Все запросы на рекомендации без явного указания книг должны учитывать 
+   накопленные предпочтения (likes/dislikes) и фильтры.
+"""
+                
+                print(f"📄 Загружен промпт длиной {len(enhanced_content)} символов")
+                return enhanced_content
         except FileNotFoundError:
             print(f"⚠️ Файл {Config.PROMPT_PATH} не найден")
             return ""
@@ -140,7 +165,14 @@ class NeuralBookParser:
                 
                 json_data = self._extract_json_from_response(content)
                 normalized_data = self._normalize_json_structure(json_data)
-                print("✅ JSON нормализован")
+                
+                # Логируем результат для отладки
+                print(f"📋 Распознанный тип: {normalized_data.get('question_type', 'неизвестно')}")
+                if normalized_data.get('feedback', {}).get('likes'):
+                    print(f"👍 Лайки: {normalized_data['feedback']['likes']}")
+                if normalized_data.get('feedback', {}).get('dislikes'):
+                    print(f"👎 Дизлайки: {normalized_data['feedback']['dislikes']}")
+                
                 return normalized_data
                     
             else:
@@ -205,6 +237,13 @@ class NeuralBookParser:
                 "other": "other"
             }
             normalized["question_type"] = type_mapping.get(question_type.lower(), question_type)
+        
+        # Проверка командных фраз
+        if 'step_back' in data and data['step_back']:
+            normalized['question_type'] = 'step_back'
+        elif 'num_question' in data and data['num_question'] == 'заново':
+            normalized['question_type'] = 'other'
+            normalized['num_question'] = 'заново'
         
         # Обработка фильтров
         filter_data = data.get("filter", {})

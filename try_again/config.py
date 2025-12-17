@@ -27,6 +27,9 @@ class Config:
     DEFAULT_STRATEGY = 'combined'
     DEFAULT_PENALTY_FACTOR = 0.7
     
+    # Настройки истории
+    MAX_HISTORY_STEPS = 5  # Максимальная глубина истории
+    
     # Настройки фильтрации
     MAX_RESULTS = 100
     SIMILARITY_THRESHOLD = 0.3
