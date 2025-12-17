@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.manifold import MDS
 from scipy.spatial.distance import euclidean, cityblock, cosine
 import warnings
+from BookDistance import BookDistanceMetrics
 warnings.filterwarnings('ignore')
 
 # Загрузка данных
@@ -131,10 +132,11 @@ class NumericalDistanceComparator:
         
         # Создаем матрицы для всех метрик
         matrices = {}
+        assd = BookDistanceMetrics(df)
         matrices['Евклидово (V1)'] = self.create_distance_matrix(self.distance_v1_euclidean)
         matrices['Манхэттенское (V2)'] = self.create_distance_matrix(self.distance_v2_manhattan)
         matrices['Косинусное (V3)'] = self.create_distance_matrix(self.distance_v3_cosine)
-        matrices['Взвешенное евклидово (V4)'] = self.create_distance_matrix(self.distance_v4_weighted_euclidean)
+        matrices['Итоговая оценка схожести'] = self.create_distance_matrix(assd.similarity_score)
         
         # Визуализация
         fig, axes = plt.subplots(2, 3, figsize=(22, 14))
